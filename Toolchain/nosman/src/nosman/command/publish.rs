@@ -209,6 +209,7 @@ impl PublishCommand {
         let mut nospub = PublishOptions::empty();
 
         let mut api_version: Option<SemVer> = None;
+        let mut min_required_minor_opt: Option<u32> = None;
 
         let mut dependencies: Option<Vec<PackageIdentifier>> = None;
         let mut category: Option<String> = None;
@@ -274,8 +275,8 @@ impl PublishCommand {
                     let module_dir = manifest_file.parent().unwrap();
                     let binary_path = module_dir.join(binary_path.unwrap());
                     let binary_path = binary_path.with_extension(
-                        if target_platform.os == "windows" { "dll" } 
-                        else if target_platform.os == "macos" { "dylib" } 
+                        if target_platform.os == "windows" { "dll" }
+                        else if target_platform.os == "macos" { "dylib" }
                         else { "so" }
                     ).into_os_string();
                     let mut additional_search_paths: Vec<PathBuf> = Vec::new();
@@ -311,19 +312,34 @@ impl PublishCommand {
                             println!("Module {} loaded successfully. Checking Nodos {:?} API version...", name.as_ref().unwrap(), &package_type);
                         }
                         let lib = lib.unwrap();
-                        let get_api_version_func_name = match package_type {
-                            PackageType::Plugin => "nosGetPluginAPIVersion",
-                            PackageType::Subsystem => "nosGetSubsystemAPIVersion",
-                            _ => panic!("Invalid package type")
-                        };
                         {
-                            let get_api_version_func: Symbol<unsafe extern "C" fn(*mut i32, *mut i32, *mut i32)> = lib.get(get_api_version_func_name.as_bytes()).expect(format!("Failed to get symbol {}", get_api_version_func_name).as_str());
+                            let get_api_version_func_name = match package_type {
+                                PackageType::Plugin => "nosGetPluginAPIVersion",
+                                PackageType::Subsystem => "nosGetSubsystemAPIVersion",
+                                _ => panic!("Invalid package type")
+                            };
+                            let get_api_version_func = lib.get::<Symbol<unsafe extern "C" fn(*mut i32, *mut i32, *mut i32)>>(get_api_version_func_name.as_bytes()).expect(format!("Failed to get symbol {}", get_api_version_func_name).as_str());
                             let mut major = 0;
                             let mut minor = 0;
                             let mut patch = 0;
                             get_api_version_func(&mut major, &mut minor, &mut patch);
                             api_version = Some(SemVer { major: (major as u32), minor: Some(minor as u32), patch: Some(patch as u32), build_number: None });
                             println!("{}", format!("{} uses Nodos {:?} API version: {}.{}.{}", name.as_ref().unwrap(), &package_type, major, minor, patch).as_str().yellow());
+                        }
+                        {
+                            let get_min_required_minor_func_name = match package_type {
+                                PackageType::Plugin => "nosGetMinimumRequiredPluginAPIMinorVersion",
+                                PackageType::Subsystem => "nosGetMinimumRequiredPluginAPIMinorVersion",
+                                _ => panic!("Invalid package type")
+                            };
+                            if let Ok(get_min_required_minor_func) = lib.get::<Symbol<unsafe extern "C" fn(*mut i32)>>(get_min_required_minor_func_name.as_bytes()) {
+                                let mut min_required_minor: i32 = 0;
+                                get_min_required_minor_func(&mut min_required_minor);
+                                if min_required_minor > 0 {
+                                    min_required_minor_opt = Some(min_required_minor as u32);
+                                    println!("{}", format!("{} requires minimum Nodos {:?} API  minor version {}", name.as_ref().unwrap(), &package_type, min_required_minor).as_str().yellow());
+                                }
+                            }
                         }
                     }
                 }
@@ -471,6 +487,7 @@ impl PublishCommand {
             module_tags,
             release_tags: if release_tags.is_empty() { None } else { Some(release_tags.clone()) },
             platform: Some(target_platform.to_string()),
+            min_required_api_minor_version: min_required_minor_opt,
         };
         if verbose {
             println!("Release entry: {:?}", release);
