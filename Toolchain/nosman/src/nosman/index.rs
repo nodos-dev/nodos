@@ -210,8 +210,6 @@ pub struct PackageReleaseEntry {
     pub release_tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub platform: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_required_api_minor_version: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
