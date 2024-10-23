@@ -566,9 +566,6 @@ impl Index {
         let pb = ProgressBar::new_spinner();
         pb.enable_steady_tick(Duration::from_millis(100));
         pb.println("Fetching package index");
-        let index = Mutex::new(Index {
-            packages: HashMap::new(),
-        });
         workspace.remotes.par_iter().for_each(|remote| {
             pb.set_message(format!("Fetching remote {}", remote.name));
             let res = remote.fetch(&workspace);
@@ -578,30 +575,9 @@ impl Index {
             }
             let package_list: Vec<PackageIndexEntry> = res.unwrap();
             pb.println(format!("Fetched {} packages from remote {}", package_list.len(), remote.name));
-
-            package_list.par_iter().for_each(|package| {
-                let res = reqwest::blocking::get(&package.releases_url);
-                if let Err(e) = res {
-                    pb.println(format!("Failed to fetch package releases for {}: {}", package.name, e));
-                    return;
-                }
-                let res = res.unwrap().json();
-                if let Err(e) = res {
-                    pb.println(format!("Failed to parse package releases for {}: {}", package.name, e));
-                    return;
-                }
-                let versions: PackageReleases = res.unwrap();
-                pb.set_message(format!("Remote {}: Found {} releases for package {}", remote.name, versions.releases.len(), versions.name));
-
-                for release in versions.releases {
-                    let mut index = index.lock().unwrap();
-                    index.add_package(&versions.name, package.package_type.clone(), release);
-                }
-            });
         });
-        let index = index.into_inner().unwrap();
         pb.finish_and_clear();
-        index
+        Index { packages: HashMap::new() }
     }
     pub fn add_package(&mut self, name: &String, package_type: PackageType, package: PackageReleaseEntry) {
         let type_versions = self.packages.entry(name.clone()).or_insert((package_type, Vec::new()));

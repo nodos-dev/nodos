@@ -25,9 +25,9 @@ impl InstallCommand {
     pub(crate) fn run_install(&self, package_name: &str, version_opt: Option<&String>, exact: bool, output_dir: &PathBuf, prefix: Option<&String>) -> CommandResult {
         // Fetch remotes
         let mut workspace = Workspace::get()?;
+        workspace.fetch_package_releases(package_name);
         let version;
         if version_opt.is_none() {
-            workspace.fetch_package_releases(package_name);
             let latest = workspace.index_cache.get_latest_release(package_name);
             if latest.is_none() {
                 return Err(InvalidArgumentError { message: format!("No versions found for package {}", package_name) });
