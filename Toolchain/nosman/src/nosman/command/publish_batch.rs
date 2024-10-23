@@ -56,7 +56,7 @@ impl PublishBatchCommand {
         for (_module_type, manifest_file_path) in module_manifests {
             let parent = manifest_file_path.parent().unwrap();
             let relative_path = parent.strip_prefix(&repo_path).unwrap();
-            let (nospub, found) = PublishOptions::from_file(&parent.join(constants::PUBLISH_OPTIONS_FILE_NAME));
+            let (publish_options, found) = PublishOptions::from_file(&parent.join(constants::PUBLISH_OPTIONS_FILE_NAME));
             if !found {
                 println!("{}", format!("Module at {} does not contain a {} file, skipping release", relative_path.display(), constants::PUBLISH_OPTIONS_FILE_NAME).dimmed());
                 continue;
@@ -66,10 +66,12 @@ impl PublishBatchCommand {
                 let changed_files = changed_files_opt.as_ref().unwrap();
                 let mut found = false;
                 let mut watch_globs = Vec::new();
-                watch_globs.extend(nospub.release_globs.iter());
-                if let Some(triggers) = &nospub.additional_publish_triggering_globs {
+                watch_globs.extend(publish_options.release_globs.iter());
+                if let Some(triggers) = &publish_options.additional_publish_triggering_globs {
                     watch_globs.extend(triggers.iter());
                 }
+                let nospub_file = ".nospub".to_string();
+                watch_globs.push(&nospub_file);
                 for glob in &watch_globs {
                     // Prepend the parent path to the glob
                     let local = relative_path.join(glob);
