@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read};
 #[cfg(unix)]
@@ -32,29 +33,78 @@ use crate::nosman::platform::{get_host_platform, Platform};
 use crate::nosman::workspace::Workspace;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct PublishOptions {
+#[serde(untagged)]
+pub enum GlobsOrPlatformSpecificGlobs {
+    Globs(Vec<String>),
+    PlatformSpecificGlobs(HashMap<String, Vec<String>>)
+}
+
+impl GlobsOrPlatformSpecificGlobs {
+    pub fn get_resolved_globs(unresolved: &GlobsOrPlatformSpecificGlobs, target_platform: &Platform) -> Vec<String> {
+        match unresolved {
+            GlobsOrPlatformSpecificGlobs::Globs(globs) => globs.clone(),
+            GlobsOrPlatformSpecificGlobs::PlatformSpecificGlobs(platform_globs) => {
+                let platform_globs = platform_globs.get(&target_platform.to_string());
+                if platform_globs.is_none() {
+                    return vec![];
+                }
+                platform_globs.unwrap().clone()
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PublishOptionsFileContent {
     #[serde(alias = "globs")]
-    pub(crate) release_globs: Vec<String>,
+    pub release_globs: GlobsOrPlatformSpecificGlobs,
     #[serde(alias = "trigger_publish_globs")]
+    pub additional_publish_triggering_globs: Option<GlobsOrPlatformSpecificGlobs>,
+    pub target_platforms: Option<Vec<String>>,
+}
+
+impl PublishOptionsFileContent {
+    pub fn from_file(nospub_file: &PathBuf) -> (PublishOptionsFileContent, bool) {
+        let mut nospub = Self::empty();
+        let found = nospub_file.exists();
+        if found {
+            let contents = std::fs::read_to_string(&nospub_file).unwrap();
+            nospub = serde_json::from_str(&contents).unwrap();
+        }
+        (nospub, found)
+    }
+    pub fn empty() -> PublishOptionsFileContent {
+        PublishOptionsFileContent { release_globs: GlobsOrPlatformSpecificGlobs::Globs(vec![]), additional_publish_triggering_globs: None, target_platforms: None }
+    }
+}
+
+pub struct PublishOptions {
+    pub(crate) release_globs: Vec<String>,
     pub(crate) additional_publish_triggering_globs: Option<Vec<String>>,
     pub(crate) target_platforms: Option<Vec<String>>,
 }
 
 impl PublishOptions {
     pub fn from_file(nospub_file: &PathBuf) -> (PublishOptions, bool) {
-        let mut nospub = PublishOptions { release_globs: vec![], additional_publish_triggering_globs: None, target_platforms: None };
-        let found = nospub_file.exists();
-        if found {
-            let contents = std::fs::read_to_string(&nospub_file).unwrap();
-            nospub = serde_json::from_str(&contents).unwrap();
+        let (nospub, found) = PublishOptionsFileContent::from_file(nospub_file);
+        if !found {
+            return (PublishOptions::all(), false);
         }
-        else {
-            nospub.release_globs.push("**".to_string());
+        let mut options = PublishOptions::empty();
+        options.release_globs = GlobsOrPlatformSpecificGlobs::get_resolved_globs(&nospub.release_globs, &get_host_platform());
+        if let Some(triggers) = &nospub.additional_publish_triggering_globs {
+            options.additional_publish_triggering_globs = Some(GlobsOrPlatformSpecificGlobs::get_resolved_globs(triggers, &get_host_platform()));
         }
-        (nospub, found)
+        options.target_platforms = nospub.target_platforms;
+        (options, true)
     }
     pub fn empty() -> PublishOptions {
         PublishOptions { release_globs: vec![], additional_publish_triggering_globs: None, target_platforms: None }
+    }
+    pub fn all() -> PublishOptions {
+        let mut options = PublishOptions::empty();
+        options.release_globs = vec!["**".to_string()];
+        options
     }
 }
 
@@ -206,7 +256,7 @@ impl PublishCommand {
 
         let abs_path = dunce::canonicalize(path).expect(format!("Failed to canonicalize path: {}", path.display()).as_str());
 
-        let mut nospub = PublishOptions::empty();
+        let mut publish_options = PublishOptions::empty();
 
         let mut api_version_opt: Option<SemVer> = None;
 
@@ -218,10 +268,10 @@ impl PublishCommand {
         let mut manifest_file = None;
         if abs_path.is_dir() {
             let (options, found) = PublishOptions::from_file(&abs_path.join(constants::PUBLISH_OPTIONS_FILE_NAME));
-            nospub = options;
+            publish_options = options;
             if !found {
                 println!("{}", format!("No {} file found in {}. All files will be included in the release.", constants::PUBLISH_OPTIONS_FILE_NAME, abs_path.display()).as_str().yellow());
-            } else if let Some(targets) = nospub.target_platforms {
+            } else if let Some(targets) = publish_options.target_platforms {
                 if !targets.contains(&target_platform.to_string()) {
                     println!("{}", format!("Target platform {} is not in the list of target platforms in {}", target_platform.to_string(), constants::PUBLISH_OPTIONS_FILE_NAME).as_str().yellow());
                     return Ok(false);
@@ -371,14 +421,15 @@ impl PublishCommand {
         let workspace = Workspace::get()?;
         let artifact_file_path;
         let temp_dir = tempdir().unwrap();
+
         if abs_path.is_dir() {
             pb.println("Following files will be included in the release:".yellow().to_string().as_str());
             pb.set_message("Scanning files".to_string());
             let mut files_to_release = vec![];
 
-            let walker = globwalk::GlobWalkerBuilder::from_patterns(&abs_path, &nospub.release_globs)
+            let walker = globwalk::GlobWalkerBuilder::from_patterns(&abs_path, &publish_options.release_globs)
                 .build()
-                .expect(format!("Failed to glob dirs: {:?}", nospub.release_globs).as_str());
+                .expect(format!("Failed to glob dirs: {:?}", publish_options.release_globs).as_str());
             for entry in walker {
                 let entry = entry.unwrap();
                 if entry.file_type().is_dir() {
